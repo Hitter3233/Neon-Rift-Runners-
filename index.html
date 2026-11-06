@@ -1,0 +1,262 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Neon Rift Runner</title>
+<style>
+:root{--cyan:#43f5ff;--pink:#ff4fd8;--bg:#080b1d;--panel:#121a35}
+*{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 50% 0,#182454,#080b1d 65%);color:#fff;font-family:system-ui,Arial,sans-serif;min-height:100vh;display:grid;place-items:center;padding:14px}
+.app{width:min(960px,100%)}header{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:12px}
+h1{font-size:clamp(24px,5vw,38px);margin:0;letter-spacing:2px;text-shadow:0 0 16px var(--cyan)}.wallet{background:#172344;border:1px solid #36517e;padding:9px 14px;border-radius:30px;color:#ffe77a;font-weight:800}
+nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}button{border:1px solid #42628d;background:#17264b;color:#fff;border-radius:12px;padding:11px 15px;font-weight:750;cursor:pointer}button:hover{filter:brightness(1.2)}button.primary{background:linear-gradient(110deg,#087c9c,#6837a7);border-color:#5ceeff}button:disabled{opacity:.45;cursor:not-allowed}
+.panel{background:#101832;border:1px solid #2c426c;border-radius:18px;padding:16px;box-shadow:0 12px 36px #0007}.screen{display:none}.screen.active{display:block}
+canvas{width:100%;display:block;background:#080e25;border:1px solid #35517d;border-radius:14px;touch-action:manipulation}
+.hint{color:#b8c8e9;font-size:14px;text-align:center;margin:10px 0 0}.stats{display:flex;gap:12px;flex-wrap:wrap;margin:10px 0}.stat{background:#172344;border-radius:10px;padding:8px 12px;color:#cde4ff}
+.field{display:grid;gap:7px;max-width:420px}input{padding:12px;border-radius:10px;border:1px solid #45618e;background:#081128;color:white;font-size:16px}
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(155px,1fr));gap:12px}.item{background:#172344;border:1px solid #334c78;border-radius:14px;padding:12px;text-align:center}.avatar{height:74px;display:grid;place-items:center}.avatar canvas{width:90px;height:70px;border:0;background:transparent}.item h3{margin:5px 0}.muted{color:#aebddd;font-size:13px}.notice{color:#9defff;min-height:22px;margin-top:10px}.row{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap}.leader-table{width:100%;border-collapse:collapse;margin-top:12px}.leader-table th,.leader-table td{text-align:left;padding:10px;border-bottom:1px solid #2c426c}.leader-table th{color:#9defff}.leader-table tr:nth-child(even){background:#172344}
+@media(max-width:520px){button{padding:10px 12px}.panel{padding:12px}}
+</style>
+</head>
+<body><main class="app">
+<header><h1>⚡ NEON RIFT RUNNER</h1><div class="wallet">🪙 <span id="coins">0</span> coins</div></header>
+<nav>
+<button class="primary" data-screen="game">▶ Play</button>
+<button data-screen="profile">👤 Profile</button>
+<button data-screen="shop">👕 Outfit Shop</button>
+<button data-screen="leaderboard">🏆 Leaderboard</button>
+</nav>
+<section id="game" class="screen active panel">
+<div class="row"><strong id="welcome">Ready to run?</strong><div class="stats"><span class="stat">Score: <b id="score">0</b></span><span class="stat">Best: <b id="best">0</b></span></div></div>
+<canvas id="gameCanvas" width="900" height="430" aria-label="Neon Rift Runner game"></canvas>
+<p class="hint">Tap the game or press SPACE / ↑ to jump. Collect glowing coins and dodge the rifts.</p>
+<div class="row" style="margin-top:12px"><button class="primary" id="startBtn">Start run</button><span class="muted" id="gameMessage">Your equipped outfit appears on the runner.</span></div>
+</section>
+<section id="profile" class="screen panel">
+<h2>👤 Player Profile</h2><p class="muted">Choose a username. Your profile is saved on this device.</p>
+<div class="field"><label for="username">Username</label><input id="username" maxlength="18" placeholder="Enter a username"><button class="primary" id="saveProfile">Save profile</button></div>
+<div class="notice" id="profileNotice"></div>
+</section>
+<section id="leaderboard" class="screen panel">
+<div class="row"><div><h2>🏆 Global Leaderboard</h2><p class="muted">Top runners around the world.</p></div><button id="refreshLeaderboard">↻ Refresh</button></div>
+<div class="notice" id="cloudStatus">Connecting to LootLocker…</div>
+<div id="leaderboardContent" class="muted">Loading leaderboard…</div>
+</section>
+<section id="shop" class="screen panel">
+<div class="row"><div><h2>👕 Outfit Shop</h2><p class="muted">Earn coins during runs, then buy and equip new looks.</p></div><strong>🪙 <span id="shopCoins">0</span></strong></div>
+<div class="grid" id="outfitGrid"></div><div class="notice" id="shopNotice"></div>
+</section>
+</main>
+<script>
+(()=>{
+const $=id=>document.getElementById(id);
+
+// LootLocker browser configuration.
+// Paste your GAME API KEY and leaderboard KEY from the LootLocker dashboard here.
+// Never put a server, admin, or secret authentication token in browser code.
+const LOOTLOCKER_GAME_KEY = 'PASTE_GAME_API_KEY_HERE';
+const LOOTLOCKER_LEADERBOARD_KEY = 'neon_rift_global';
+const LOOTLOCKER_GAME_VERSION = '1.0.0';
+const LOOTLOCKER_API = 'https://api.lootlocker.com';
+const LOOTLOCKER_VERSION_HEADER = '2021-03-01';
+let lootSessionToken = null;
+let lootPlayerId = null;
+let lootReady = false;
+let lootStatusMessage = 'LootLocker is not configured yet.';
+const playerIdentifierKey = 'nrr_lootlocker_player_identifier';
+
+function getPlayerIdentifier(){
+  let id = '';
+  try{id=localStorage.getItem(playerIdentifierKey)||''}catch(e){}
+  if(!id){
+    id=(window.crypto&&crypto.randomUUID)?crypto.randomUUID():
+      'nrr-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2)+Math.random().toString(36).slice(2);
+    try{localStorage.setItem(playerIdentifierKey,id)}catch(e){}
+  }
+  return id;
+}
+function setCloudStatus(message){
+  lootStatusMessage=message;
+  const el=$('cloudStatus');
+  if(el)el.textContent=message;
+}
+async function lootRequest(path, options={}){
+  const headers={'Content-Type':'application/json','LL-Version':LOOTLOCKER_VERSION_HEADER,...(options.headers||{})};
+  if(lootSessionToken)headers['x-session-token']=lootSessionToken;
+  const response=await fetch(LOOTLOCKER_API+path,{...options,headers});
+  const raw=await response.text();
+  let result={};
+  try{result=raw?JSON.parse(raw):{}}catch(e){result={message:raw}}
+  if(!response.ok)throw new Error(result.message||result.error||('LootLocker request failed ('+response.status+')'));
+  return result;
+}
+async function connectLootLocker(){
+  if(!LOOTLOCKER_GAME_KEY||LOOTLOCKER_GAME_KEY==='PASTE_GAME_API_KEY_HERE'){
+    lootReady=false;
+    setCloudStatus('LootLocker setup needed: add your Game API Key in index.html.');
+    return;
+  }
+  try{
+    setCloudStatus('Connecting to LootLocker…');
+    const session=await fetch(LOOTLOCKER_API+'/game/v2/session/guest',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({
+        game_key:LOOTLOCKER_GAME_KEY,
+        game_version:LOOTLOCKER_GAME_VERSION,
+        player_identifier:getPlayerIdentifier()
+      })
+    });
+    const sessionData=await session.json();
+    if(!session.ok||!sessionData.session_token)throw new Error(sessionData.message||sessionData.error||'Guest login failed.');
+    lootSessionToken=sessionData.session_token;
+    lootPlayerId=sessionData.player_id;
+    lootReady=true;
+    setCloudStatus('Connected to LootLocker. Player ID: '+lootPlayerId);
+    // Keep the player's chosen local name synchronized with their LootLocker profile.
+    try{
+      await lootRequest('/game/player/name',{
+        method:'PATCH',
+        body:JSON.stringify({name:data.username})
+      });
+    }catch(nameError){console.warn('Could not sync player name:',nameError)}
+    // If this browser already has a best score, publish it on first connection too.
+    if(data.best>0) await submitOnlineScore(data.best);
+  }catch(error){
+    lootReady=false;
+    setCloudStatus('LootLocker connection failed: '+error.message);
+    console.warn('LootLocker connection failed:',error);
+  }
+}
+async function syncLootLockerName(name){
+  if(!lootReady)return;
+  try{
+    await lootRequest('/game/player/name',{method:'PATCH',body:JSON.stringify({name})});
+    setCloudStatus('Connected. Your username is synced to LootLocker.');
+  }catch(error){
+    setCloudStatus('Username saved on this device, but cloud sync failed: '+error.message);
+  }
+}
+async function submitOnlineScore(score){
+  if(!lootReady){
+    setCloudStatus('Score saved on this device. Online score was not submitted because LootLocker is not connected.');
+    return;
+  }
+  try{
+    await lootRequest('/game/leaderboards/'+encodeURIComponent(LOOTLOCKER_LEADERBOARD_KEY)+'/submit',{
+      method:'POST',body:JSON.stringify({score:Number(score)})
+    });
+    setCloudStatus('Score '+score+' submitted to the global leaderboard!');
+  }catch(error){
+    setCloudStatus('Could not submit online score: '+error.message);
+  }
+}
+async function loadOnlineLeaderboard(){
+  const content=$('leaderboardContent');
+  if(!content)return;
+  if(!lootReady){
+    content.textContent='Connect LootLocker to view the global leaderboard. Check the cloud status above.';
+    return;
+  }
+  content.textContent='Loading leaderboard…';
+  try{
+    const result=await lootRequest('/game/leaderboards/'+encodeURIComponent(LOOTLOCKER_LEADERBOARD_KEY)+'/list?count=10',{method:'GET'});
+    const items=Array.isArray(result.items)?result.items:[];
+    content.innerHTML='';
+    if(!items.length){content.textContent='No scores yet. Be the first to set a record!';return;}
+    const table=document.createElement('table');table.className='leader-table';
+    const thead=document.createElement('thead'),headRow=document.createElement('tr');
+    ['Rank','Runner','Score'].forEach(label=>{const th=document.createElement('th');th.textContent=label;headRow.append(th)});
+    thead.append(headRow);table.append(thead);
+    const tbody=document.createElement('tbody');
+    items.forEach((item,index)=>{
+      const tr=document.createElement('tr');
+      const playerName=(item.player&&item.player.name)||item.player_name||('Runner '+item.member_id);
+      [item.rank||index+1,playerName,Number(item.score||0).toLocaleString()].forEach(value=>{
+        const td=document.createElement('td');td.textContent=String(value);tr.append(td);
+      });
+      tbody.append(tr);
+    });
+    table.append(tbody);content.append(table);
+  }catch(error){
+    content.textContent='Could not load leaderboard: '+error.message;
+  }
+}
+const outfits=[
+{id:'classic',name:'Rift Rookie',color:'#47f4ff',price:0,desc:'The original neon runner.'},
+{id:'sunset',name:'Sunset Surge',color:'#ff8a45',price:35,desc:'A warm sunset glow.'},
+{id:'berry',name:'Cyber Berry',color:'#ff4fd8',price:60,desc:'Bright pink energy.'},
+{id:'lime',name:'Toxic Lime',color:'#b6ff45',price:85,desc:'A vivid electric green.'},
+{id:'royal',name:'Royal Pulse',color:'#a88bff',price:120,desc:'Purple-powered style.'},
+{id:'gold',name:'Golden Comet',color:'#ffd85a',price:175,desc:'A legendary golden look.'}
+];
+const defaultData={username:'Runner',coins:0,owned:['classic'],equipped:'classic',best:0};
+let data;try{data={...defaultData,...JSON.parse(localStorage.getItem('nrr_profile')||'{}')}}catch(e){data={...defaultData}}
+data.owned=Array.isArray(data.owned)?data.owned:['classic'];
+const save=()=>{try{localStorage.setItem('nrr_profile',JSON.stringify(data))}catch(e){};updateUI()};
+function updateUI(){
+$('coins').textContent=data.coins;$('shopCoins').textContent=data.coins;$('best').textContent=data.best;
+$('username').value=data.username;$('welcome').textContent=`Good luck, ${data.username}!`;
+}
+function showScreen(id){document.querySelectorAll('.screen').forEach(s=>s.classList.toggle('active',s.id===id));if(id==='shop')renderShop();if(id==='leaderboard')loadOnlineLeaderboard()}
+document.querySelectorAll('[data-screen]').forEach(b=>b.onclick=()=>showScreen(b.dataset.screen));
+$('saveProfile').onclick=()=>{let n=$('username').value.trim().replace(/[<>]/g,'').slice(0,18);if(!n){$('profileNotice').textContent='Please enter a username.';return}data.username=n;$('profileNotice').textContent=`Profile saved. Welcome, ${n}!`;save();syncLootLockerName(n)};
+function drawAvatar(ctx,x,y,color,scale=1){
+ctx.save();ctx.translate(x,y);ctx.scale(scale,scale);
+ctx.shadowColor=color;ctx.shadowBlur=18;ctx.fillStyle=color;
+ctx.beginPath();ctx.roundRect(-13,-27,26,38,8);ctx.fill();
+ctx.shadowBlur=0;ctx.fillStyle='#101832';ctx.fillRect(-8,-17,16,5);
+ctx.fillStyle=color;ctx.fillRect(-11,10,-1,14);ctx.fillRect(3,10,8,14);
+ctx.restore();
+}
+function renderShop(){
+$('outfitGrid').innerHTML='';
+outfits.forEach(o=>{
+const owned=data.owned.includes(o.id),equipped=data.equipped===o.id;
+const card=document.createElement('div');card.className='item';
+const preview=document.createElement('div');preview.className='avatar';const c=document.createElement('canvas');c.width=100;c.height=75;preview.append(c);
+drawAvatar(c.getContext('2d'),50,42,o.color,1);
+const title=document.createElement('h3');title.textContent=o.name;
+const desc=document.createElement('div');desc.className='muted';desc.textContent=o.desc;
+const price=document.createElement('p');price.className='muted';price.textContent=o.price===0?'Free':`🪙 ${o.price} coins`;
+const btn=document.createElement('button');btn.className=equipped?'':'primary';btn.textContent=equipped?'Equipped':owned?'Equip':`Buy · ${o.price}`;
+btn.disabled=equipped||(!owned&&data.coins<o.price);
+btn.onclick=()=>{if(owned){data.equipped=o.id;$('shopNotice').textContent=`${o.name} equipped!`}else if(data.coins>=o.price){data.coins-=o.price;data.owned.push(o.id);data.equipped=o.id;$('shopNotice').textContent=`Purchased and equipped ${o.name}!`}save();renderShop()};
+card.append(preview,title,desc,price,btn);$('outfitGrid').append(card);
+});
+}
+const canvas=$('gameCanvas'),ctx=canvas.getContext('2d');
+let running=false,raf=0,score=0,world=0,player={x:125,y:330,vy:0,onGround:true},obstacles=[],coins=[],last=0,coinCount=0;
+const ground=360;
+function reset(){score=0;world=0;player={x:125,y:330,vy:0,onGround:true};obstacles=[];coins=[];last=0;coinCount=0;$('score').textContent='0'}
+function spawn(){obstacles.push({x:930,w:28+Math.random()*22,h:38+Math.random()*35});if(Math.random()<.8)coins.push({x:950,y:270+Math.random()*55,taken:false})}
+function draw(){
+ctx.clearRect(0,0,900,430);
+let grad=ctx.createLinearGradient(0,0,0,430);grad.addColorStop(0,'#101b45');grad.addColorStop(1,'#070b1b');ctx.fillStyle=grad;ctx.fillRect(0,0,900,430);
+ctx.strokeStyle='#1a3761';ctx.lineWidth=1;for(let x=0;x<900;x+=45){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,ground);ctx.stroke()}
+ctx.fillStyle='#16294b';ctx.fillRect(0,ground,900,70);ctx.strokeStyle='#43f5ff';ctx.beginPath();ctx.moveTo(0,ground);ctx.lineTo(900,ground);ctx.stroke();
+coins.forEach(c=>{if(c.taken)return;ctx.fillStyle='#ffe66d';ctx.shadowColor='#ffe66d';ctx.shadowBlur=16;ctx.beginPath();ctx.arc(c.x,c.y,9,0,Math.PI*2);ctx.fill();ctx.shadowBlur=0});
+obstacles.forEach(o=>{ctx.fillStyle='#ff4f82';ctx.shadowColor='#ff4f82';ctx.shadowBlur=15;ctx.fillRect(o.x,ground-o.h,o.w,o.h);ctx.shadowBlur=0});
+let outfit=outfits.find(o=>o.id===data.equipped)||outfits[0];drawAvatar(ctx,player.x,player.y,outfit.color,1.1);
+ctx.fillStyle='#c8dcff';ctx.font='15px system-ui';ctx.fillText(data.username,player.x-35,player.y-42);
+if(!running){ctx.fillStyle='#dcecff';ctx.font='bold 27px system-ui';ctx.textAlign='center';ctx.fillText('NEON RIFT RUNNER',450,110);ctx.font='16px system-ui';ctx.fillText('Press Start Run to begin',450,145);ctx.textAlign='left'}
+}
+function jump(){if(!running){start();return}if(player.onGround){player.vy=-13;player.onGround=false}}
+function frame(t){
+if(!running)return;let dt=Math.min((t-last)/16.67||1,2);last=t;world+=dt;score+=dt*.55;
+if(Math.random()<.018*dt)spawn();
+player.vy+=.7*dt;player.y+=player.vy*dt;if(player.y>=330){player.y=330;player.vy=0;player.onGround=true}
+obstacles.forEach(o=>o.x-=6*dt);coins.forEach(c=>{c.x-=6*dt;if(!c.taken&&Math.hypot(c.x-player.x,c.y-(player.y-5))<28){c.taken=true;coinCount++;data.coins+=1;updateUI()}});
+obstacles=obstacles.filter(o=>o.x+o.w>0);coins=coins.filter(c=>c.x>-20&&!c.taken);
+for(const o of obstacles){if(o.x<player.x+15&&o.x+o.w>player.x-12&&player.y+15>ground-o.h){endRun();return}}
+$('score').textContent=Math.floor(score).toLocaleString();draw();raf=requestAnimationFrame(frame)
+}
+function start(){if(running)return;reset();running=true;$('gameMessage').textContent='Run in progress…';$('startBtn').textContent='Restart run';last=0;draw();raf=requestAnimationFrame(frame)}
+function endRun(){running=false;cancelAnimationFrame(raf);let final=Math.floor(score);const previousBest=data.best;data.best=Math.max(data.best,final);data.coins+=Math.floor(final/25);$('gameMessage').textContent=`Run over! Score ${final}. Earned ${Math.floor(final/25)} bonus coins plus ${coinCount} collected.`;$('startBtn').textContent='Run again';save();if(final>previousBest)submitOnlineScore(final);draw()}
+$('startBtn').onclick=()=>{if(running){running=false;cancelAnimationFrame(raf)}start()};
+canvas.addEventListener('pointerdown',jump);
+window.addEventListener('keydown',e=>{if(e.code==='Space'||e.code==='ArrowUp'){e.preventDefault();jump()}});
+$('refreshLeaderboard').onclick=loadOnlineLeaderboard;
+updateUI();renderShop();draw();connectLootLocker();
+})();
+</script></body></html>
